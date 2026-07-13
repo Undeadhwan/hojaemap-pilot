@@ -62,6 +62,7 @@
     #panel { width:100%; border-left:none; border-top:1px solid var(--line);
              flex:none; height:auto; overflow:visible; padding-bottom:80px; }
     #gantt { height:auto; padding:14px 10px 90px; }
+    #raw { height:auto; padding:12px 10px 90px; }
   }
 </style>
 </head>
@@ -72,6 +73,7 @@
   <div class="chips" id="f-view">
     <span class="chip on" id="v-map">지도</span>
     <span class="chip" id="v-gantt">타임라인</span>
+    <span class="chip" id="v-raw">수도권 데이터</span>
   </div>
   <div class="chips" id="f-cat"></div>
   <div class="chips" id="f-scale"></div>
@@ -81,6 +83,41 @@
   <div id="map"></div>
   <aside id="panel"></aside>
 </div>
+
+<div id="raw" style="display:none; height:calc(100vh - 87px); overflow-y:auto; padding:16px 20px 80px;">
+  <div style="max-width:1080px; margin:0 auto;">
+    <div class="pt">수도권 원시 신호 탐색 (최근 1년)</div>
+    <div class="ps">수집·필터 통과한 <b>원시 공고/공시</b>층입니다 — 아직 신호(§3.1) 아님. 큐레이션 판단용.
+      나라장터: 수도권 기관 + 키워드(타당성·기본계획·실시설계·지구단위·정비계획·조성·건립·신설·확장) / DART: 수도권 소재지 언급 공시</div>
+    <div class="rawctl">
+      <select id="r-sido"><option value="">시도: 전체</option></select>
+      <select id="r-sgg"><option value="">시군구: 전체</option></select>
+      <select id="r-price">
+        <option value="0">금액: 전체</option>
+        <option value="100000000">1억+</option>
+        <option value="300000000">3억+</option>
+        <option value="500000000" selected>5억+ (권장 컷)</option>
+        <option value="1000000000">10억+</option>
+        <option value="3000000000">30억+</option>
+      </select>
+      <select id="r-src"><option value="">소스: 전체</option><option>G2B</option><option>DART</option></select>
+      <input id="r-q" type="search" placeholder="제목 검색 (예: 지구단위, 돔구장)">
+    </div>
+    <div class="ps" id="r-count" style="margin-top:10px"></div>
+    <div id="r-list"></div>
+    <div style="text-align:center; margin:14px 0;"><span class="chip" id="r-more" style="display:none">더 보기</span></div>
+  </div>
+</div>
+<style>
+  .rawctl { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .rawctl select, .rawctl input { font-size:13px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  .rawctl input { flex:1; min-width:180px; }
+  .rrow { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
+  .rrow .rt { font-size:13.5px; font-weight:600; }
+  .rrow .rm { font-size:11.5px; color:var(--muted); margin-top:3px; }
+  .rrow .rm b { color:var(--ink); font-weight:600; }
+  .rrow a { color:var(--accent); text-decoration:none; font-size:11.5px; }
+</style>
 
 <div id="gantt" style="display:none; height:calc(100vh - 87px); overflow-y:auto; padding:20px 24px 70px;">
   <div style="max-width:980px; margin:0 auto;">
@@ -624,9 +661,63 @@ function applyYearFilter() {
 function setView(mode) {
   document.getElementById("wrap").style.display = mode === "map" ? "flex" : "none";
   document.getElementById("gantt").style.display = mode === "gantt" ? "block" : "none";
-  document.getElementById("v-map").classList.toggle("on", mode === "map");
-  document.getElementById("v-gantt").classList.toggle("on", mode === "gantt");
+  document.getElementById("raw").style.display = mode === "raw" ? "block" : "none";
+  for (const v of ["map", "gantt", "raw"])
+    document.getElementById("v-" + v).classList.toggle("on", mode === v);
   if (mode === "gantt") buildGantt();
+  if (mode === "raw") initRaw();
+}
+
+/* ══════════ 수도권 원시 데이터 탐색 ══════════ */
+let RAW = null, rawShown = 0;
+const RAW_PAGE = 150;
+async function initRaw() {
+  if (!RAW) {
+    RAW = (await fetch("capital_raw.json").then(r => r.json())).rows;
+    // 시도/시군구 셀렉트 채우기
+    const sidos = [...new Set(RAW.map(r => r.rg.split(" ")[0]))].sort();
+    const sel = document.getElementById("r-sido");
+    sidos.forEach(s => sel.appendChild(new Option(s, s)));
+    sel.onchange = () => { fillSgg(); renderRaw(); };
+    const sgg = document.getElementById("r-sgg");
+    const fillSgg = () => {
+      const sido = sel.value;
+      sgg.innerHTML = '<option value="">시군구: 전체</option>';
+      [...new Set(RAW.filter(r => !sido || r.rg.startsWith(sido)).map(r => r.rg))].sort()
+        .forEach(g => sgg.appendChild(new Option(g, g)));
+    };
+    fillSgg();
+    for (const id of ["r-sgg", "r-price", "r-src"]) document.getElementById(id).onchange = renderRaw;
+    document.getElementById("r-q").oninput = () => { clearTimeout(window._rq); window._rq = setTimeout(renderRaw, 250); };
+    document.getElementById("r-more").onclick = () => renderRaw(true);
+  }
+  renderRaw();
+}
+function rawFiltered() {
+  const sido = document.getElementById("r-sido").value;
+  const sgg = document.getElementById("r-sgg").value;
+  const minP = +document.getElementById("r-price").value;
+  const src = document.getElementById("r-src").value;
+  const q = document.getElementById("r-q").value.trim();
+  return RAW.filter(r =>
+    (!sido || r.rg.startsWith(sido)) && (!sgg || r.rg === sgg) && (!src || r.src === src)
+    && (minP === 0 || r.src === "DART" || (r.p || 0) >= minP)   // DART는 금액 개념 없음 → 통과
+    && (!q || r.t.includes(q) || r.org.includes(q))
+  ).sort((a, b) => b.d.localeCompare(a.d));
+}
+function renderRaw(more) {
+  const list = document.getElementById("r-list");
+  const rows = rawFiltered();
+  rawShown = more ? rawShown + RAW_PAGE : RAW_PAGE;
+  document.getElementById("r-count").innerHTML =
+    `<b>${rows.length.toLocaleString()}건</b> (월평균 ${(rows.length / 12).toFixed(1)}건) — 표시 ${Math.min(rawShown, rows.length)}건, 공고일 최신순`;
+  list.innerHTML = rows.slice(0, rawShown).map(r => `
+    <div class="rrow">
+      <div class="rt">${r.t}</div>
+      <div class="rm">${r.d} · <b>${r.rg}</b> · ${r.org} · ${r.src}${r.p ? ` · <b>${(r.p / 1e8).toFixed(1)}억</b>` : ""}
+        ${r.kw ? ` · ${r.kw}` : ""} · <a href="${r.u}" target="_blank">원문</a></div>
+    </div>`).join("");
+  document.getElementById("r-more").style.display = rows.length > rawShown ? "inline-block" : "none";
 }
 
 /* ══════════ 부트 ══════════ */
@@ -650,6 +741,7 @@ function setView(mode) {
   bootMap();
   document.getElementById("v-map").onclick = () => setView("map");
   document.getElementById("v-gantt").onclick = () => setView("gantt");
+  document.getElementById("v-raw").onclick = () => setView("raw");
   document.getElementById("yr").oninput = applyYearFilter;
 })();
 </script>
