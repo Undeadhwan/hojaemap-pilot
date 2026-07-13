@@ -410,6 +410,55 @@ function renderDetail(s) {
     </div>`;
 }
 
+/* ══════════ 시군구 피드 (지도에서 구/시 클릭) ══════════ */
+function showSgg(disp) {
+  view = { mode: "sgg", sgg: disp };
+  renderPanel(); mapApi?.clearRadius();
+  const bd = window._sggBounds?.[disp];
+  if (bd && window._map) window._map.fitBounds(bd);
+}
+function pointInSgg(pt, disp) {
+  return (window._sggRings?.[disp] || []).some(r => pointInRing(pt[0], pt[1], r));
+}
+function renderSggFeed(disp) {
+  const p = document.getElementById("panel");
+  const curated = SIGNALS.filter(visible)
+    .filter(s => signalPoints(s).some(pt => pointInSgg(pt.coord, disp)));
+  const rawAll = (RAW || []).filter(r => `${r.sd} ${r.sg}` === disp);
+  const rawCut = rawAll.filter(r => r.src === "DART" || (r.p || 0) >= RAW_BADGE_CUT);
+  p.innerHTML = `
+    <span class="back" onclick="goHome()">← 지도 전체</span>
+    <div class="pt">${disp}</div>
+    <div class="ps">큐레이션 신호 ${curated.length}건 · 원시 공고/공시 ${rawCut.length}건(5억+·DART) — 전체 원시 ${rawAll.length}건</div>
+    <div id="list"></div>
+    ${rawCut.length ? `<div class="group-h">원시 공고/공시 (5억+·DART, 최신순 — 신호 아님·큐레이션 대기)</div><div id="rawlist"></div>
+      <div style="margin:10px 0"><span class="chip" onclick="gotoRaw('${disp}')">수도권 데이터 탭에서 전체 보기 →</span></div>` : ""}`;
+  const list = p.querySelector("#list");
+  curated.sort((a, b) => (b.last_movement || "").localeCompare(a.last_movement || ""))
+    .forEach(s => {
+      const el = document.createElement("div");
+      el.className = "card"; el.innerHTML = cardHtml(s);
+      el.onclick = () => showSignal(s, true);
+      list.appendChild(el);
+    });
+  const rl = p.querySelector("#rawlist");
+  if (rl) rawCut.sort((a, b) => b.d.localeCompare(a.d)).slice(0, 30).forEach(r => {
+    rl.insertAdjacentHTML("beforeend", `
+      <div class="rrow">
+        <div class="rt">${r.t}</div>
+        <div class="rm">${r.d} · ${r.org} · ${r.src}${r.p ? ` · <b>${(r.p / 1e8).toFixed(1)}억</b>` : ""} · <a href="${r.u}" target="_blank">원문</a></div>
+      </div>`);
+  });
+}
+function gotoRaw(disp) {
+  const [sd, sg] = disp.split(" ");
+  setView("raw");
+  document.getElementById("r-sido").value = sd;
+  document.getElementById("r-sido").onchange();
+  document.getElementById("r-sgg").value = sg;
+  renderRaw();
+}
+
 /* ══════════ 뷰 전환 ══════════ */
 function goHome() { view = { mode: "home" }; renderPanel(); mapApi?.clearRadius(); }
 function showDong(f) { view = { mode: "dong", dong: f }; renderPanel(); mapApi?.clearRadius(); }
@@ -420,6 +469,7 @@ function showSignal(s, pan) {
 }
 function renderPanel() {
   if (view.mode === "dong") return renderDong(view.dong);
+  if (view.mode === "sgg") return renderSggFeed(view.sgg);
   if (view.mode === "detail") return renderDetail(view.signal);
   renderHome();
 }
@@ -452,14 +502,18 @@ function initLeaflet() {
     { maxZoom: 19, attribution: "&copy; OpenStreetMap — 임시 베이스맵 (카카오맵 승인 시 전환)" }).addTo(map);
   const DONG_ZOOM = 12;   // 이 줌 이상 = 동 레벨, 미만 = 시군구 레벨
 
-  // ── 시군구 79 폴리곤 (항상 표시) + 클릭 시 확대
+  // ── 시군구 79 폴리곤 (항상 표시) + 클릭 → 지역 목록 + 확대
   const sggCenters = {};  // 표시명 → [좌표 합, 개수]
+  window._sggBounds = {}; window._sggRings = {};
   SGG_GEO.features.forEach(f => {
     const disp = `${f.properties.sido} ${sggDisplayName(f.properties.name)}`;
     ringsOf(f).forEach(r => {
       const poly = L.polygon(r.map(([x, y]) => [y, x]),
         { color: "#3a4a5c", weight: 1.2, opacity: .55, fillOpacity: .01 }).addTo(map);
-      poly.on("click", () => map.fitBounds(poly.getBounds()));
+      poly.on("click", () => showSgg(disp));
+      if (!window._sggBounds[disp]) window._sggBounds[disp] = poly.getBounds();
+      else window._sggBounds[disp].extend(poly.getBounds());
+      (window._sggRings[disp] = window._sggRings[disp] || []).push(r);
       const c = ringCentroid(r);
       const acc = sggCenters[disp] || [0, 0, 0];
       sggCenters[disp] = [acc[0] + c[0], acc[1] + c[1], acc[2] + 1];
@@ -496,7 +550,7 @@ function initLeaflet() {
       const b = L.marker([c[1], c[0]], {
         icon: L.divIcon({ className: "", html: `<div class="dong-badge">${disp.split(" ")[1]}${n ? " " + n : ""}</div>`, iconSize: null })
       }).addTo(map);
-      b.on("click", () => { map.setView([c[1], c[0]], DONG_ZOOM + 1); });
+      b.on("click", () => showSgg(disp));
       badges.push(b);
     }
   };
@@ -510,7 +564,8 @@ function initLeaflet() {
       const c = ringCentroid(ringsOf(f)[0]);
       if (!bd.contains([c[1], c[0]])) continue;
       shown++;
-      const n = SIGNALS.filter(visible).filter(s => dongRelation(s, f) === "소재").length;
+      // 영향권(소재+반경권) 전체 — 동 피드 목록 건수와 동일 기준 (§3.3.1 동 중복 노출 정상)
+      const n = SIGNALS.filter(visible).filter(s => dongRelation(s, f)).length;
       const b = L.marker([c[1], c[0]], {
         icon: L.divIcon({ className: "", html: `<div class="dong-badge">${dongName(f)}${n ? " " + n : ""}</div>`, iconSize: null })
       }).addTo(map);
