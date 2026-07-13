@@ -217,7 +217,13 @@ const INFLUENCE = {
 const getRadius = s => s.radius_m || INFLUENCE[s.template_type]?.[s.scale] || RADIUS_BY_SCALE[s.scale] || 800;
 
 /* ══════════ 상태 ══════════ */
-let DONG_GEO = null, SIGNALS = [], MACRO = [];
+let DONG_GEO = null, SGG_GEO = null, SIGNALS = [], MACRO = [];
+const RAW_BADGE_CUT = 500000000;  // 시군구 뱃지 집계의 원시공고 금액 하한 (5억)
+/* 대도시 분할구(고양시덕양구 등) → 시 단위 표시명 */
+function sggDisplayName(name) {
+  const m = name.match(/^(.+?시)(.+구)$/);
+  return m ? m[1] : name;
+}
 const filter = {
   cat: new Set(Object.keys(DISPLAY_CAT)),
   scale: new Set(["광역", "지구", "근린"]),
@@ -316,8 +322,8 @@ function renderHome() {
     .sort((a, b) => (b.last_movement || "").localeCompare(a.last_movement || ""));
   const recent = shown.filter(s => weeksAgo(s.last_movement) === 0);
   p.innerHTML = `
-    <div class="pt">강서구 신호 ${shown.length}건</div>
-    <div class="ps">정렬: 최근 움직임순 (점수·중요도 정렬 없음)</div>
+    <div class="pt">큐레이션 신호 ${shown.length}건 <span style="font-weight:400;font-size:11px;color:var(--muted)">(현재 강서 중심 — 수도권 원시층은 [수도권 데이터] 탭)</span></div>
+    <div class="ps">정렬: 최근 움직임순 (점수·중요도 정렬 없음) · 지도 축소 = 시군구 집계(원시 5억+ 포함), 확대 = 서울 법정동</div>
     <div class="summary"><b>이번 주 변동</b> — ${
       recent.length ? recent.map(s => s.title).join(" · ")
       : "없음 · 최근 움직임: " + (shown[0] ? `${shown[0].last_movement} ${shown[0].title}` : "-")
@@ -437,28 +443,96 @@ function loadLeaflet() {
   document.head.appendChild(s);
 }
 function initLeaflet() {
-  const map = L.map("map").setView([37.5568, 126.8397], 13);
+  const map = L.map("map").setView([37.556, 126.95], 10);   // 수도권 전역
+  window._map = map;   // 디버그·검증용
+  // 컨테이너 크기 변동 대응 (초기 0크기·모바일 회전 등)
+  setTimeout(() => map.invalidateSize(), 300);
+  new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById("map"));
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     { maxZoom: 19, attribution: "&copy; OpenStreetMap — 임시 베이스맵 (카카오맵 승인 시 전환)" }).addTo(map);
-  DONG_GEO.features.forEach(f => {
+  const DONG_ZOOM = 12;   // 이 줌 이상 = 동 레벨, 미만 = 시군구 레벨
+
+  // ── 시군구 79 폴리곤 (항상 표시) + 클릭 시 확대
+  const sggCenters = {};  // 표시명 → [좌표 합, 개수]
+  SGG_GEO.features.forEach(f => {
+    const disp = `${f.properties.sido} ${sggDisplayName(f.properties.name)}`;
     ringsOf(f).forEach(r => {
-      const poly = L.polygon(r.map(([x, y]) => [y, x]), { color: "#555", weight: 1.5, opacity: .65, fillOpacity: .02 }).addTo(map);
-      poly.on("click", () => showDong(f));
+      const poly = L.polygon(r.map(([x, y]) => [y, x]),
+        { color: "#3a4a5c", weight: 1.2, opacity: .55, fillOpacity: .01 }).addTo(map);
+      poly.on("click", () => map.fitBounds(poly.getBounds()));
+      const c = ringCentroid(r);
+      const acc = sggCenters[disp] || [0, 0, 0];
+      sggCenters[disp] = [acc[0] + c[0], acc[1] + c[1], acc[2] + 1];
     });
   });
+
+  // ── 서울 법정동 467 (동 레벨 줌에서만)
+  const dongLayer = L.layerGroup();
+  DONG_GEO.features.forEach(f => {
+    ringsOf(f).forEach(r => {
+      const poly = L.polygon(r.map(([x, y]) => [y, x]), { color: "#777", weight: 1, opacity: .6, fillOpacity: .01 });
+      poly.on("click", () => showDong(f));
+      dongLayer.addLayer(poly);
+    });
+  });
+
   let badges = [], pins = [];
-  const refreshPins = () => {
-    pins.forEach(m => map.removeLayer(m)); pins = [];
-    badges.forEach(m => map.removeLayer(m)); badges = [];
-    DONG_GEO.features.forEach(f => {
-      const n = SIGNALS.filter(visible).filter(s => dongRelation(s, f) === "소재").length;
+  const clearBadges = () => { badges.forEach(m => map.removeLayer(m)); badges = []; };
+
+  // 시군구 뱃지: 원시공고(5억+)+DART + 큐레이션 신호 집계 (개수 = 사실)
+  const sggCounts = {};
+  (RAW || []).forEach(r => {
+    if (r.src === "G2B" && (r.p || 0) < RAW_BADGE_CUT) return;
+    if (r.sg.startsWith("(")) return;   // 전역·미상은 뱃지 미표시
+    const k = `${r.sd} ${r.sg}`;
+    sggCounts[k] = (sggCounts[k] || 0) + 1;
+  });
+  const renderSggBadges = () => {
+    clearBadges();
+    for (const [disp, acc] of Object.entries(sggCenters)) {
+      const c = [acc[0] / acc[2], acc[1] / acc[2]];
+      const curated = disp === "서울 강서구" ? SIGNALS.filter(visible).length : 0;
+      const n = (sggCounts[disp] || 0) + curated;
+      const b = L.marker([c[1], c[0]], {
+        icon: L.divIcon({ className: "", html: `<div class="dong-badge">${disp.split(" ")[1]}${n ? " " + n : ""}</div>`, iconSize: null })
+      }).addTo(map);
+      b.on("click", () => { map.setView([c[1], c[0]], DONG_ZOOM + 1); });
+      badges.push(b);
+    }
+  };
+  // 동 뱃지: 뷰포트 내 + 큐레이션 소재 개수
+  const renderDongBadges = () => {
+    clearBadges();
+    const bd = map.getBounds();
+    let shown = 0;
+    for (const f of DONG_GEO.features) {
+      if (shown > 120) break;
       const c = ringCentroid(ringsOf(f)[0]);
+      if (!bd.contains([c[1], c[0]])) continue;
+      shown++;
+      const n = SIGNALS.filter(visible).filter(s => dongRelation(s, f) === "소재").length;
       const b = L.marker([c[1], c[0]], {
         icon: L.divIcon({ className: "", html: `<div class="dong-badge">${dongName(f)}${n ? " " + n : ""}</div>`, iconSize: null })
       }).addTo(map);
       b.on("click", () => showDong(f));
       badges.push(b);
-    });
+    }
+  };
+  const applyLOD = () => {
+    if (map.getZoom() >= DONG_ZOOM) {
+      if (!map.hasLayer(dongLayer)) map.addLayer(dongLayer);
+      renderDongBadges();
+    } else {
+      if (map.hasLayer(dongLayer)) map.removeLayer(dongLayer);
+      renderSggBadges();
+    }
+  };
+  map.on("zoomend moveend", applyLOD);
+  window._dbg = { applyLOD, renderSggBadges, renderDongBadges, get badges() { return badges; } };
+
+  const refreshPins = () => {
+    pins.forEach(m => map.removeLayer(m)); pins = [];
+    applyLOD();
     SIGNALS.filter(visible).forEach(sg => {
       const pts = signalPoints(sg);
       pts.forEach((p, k) => {
@@ -669,23 +743,23 @@ function setView(mode) {
 }
 
 /* ══════════ 수도권 원시 데이터 탐색 ══════════ */
-let RAW = null, rawShown = 0;
+let RAW = null, rawShown = 0, rawReady = false;
 const RAW_PAGE = 150;
-async function initRaw() {
-  if (!RAW) {
-    RAW = (await fetch("capital_raw.json").then(r => r.json())).rows;
-    // 시도/시군구 셀렉트 채우기
-    const sidos = [...new Set(RAW.map(r => r.rg.split(" ")[0]))].sort();
+const SIDO_LABEL = { "서울": "서울특별시", "경기": "경기도", "인천": "인천광역시" };
+function initRaw() {
+  if (!rawReady) {
+    rawReady = true;
     const sel = document.getElementById("r-sido");
-    sidos.forEach(s => sel.appendChild(new Option(s, s)));
-    sel.onchange = () => { fillSgg(); renderRaw(); };
+    ["서울", "경기", "인천"].forEach(s => sel.appendChild(new Option(SIDO_LABEL[s], s)));
     const sgg = document.getElementById("r-sgg");
     const fillSgg = () => {
       const sido = sel.value;
       sgg.innerHTML = '<option value="">시군구: 전체</option>';
-      [...new Set(RAW.filter(r => !sido || r.rg.startsWith(sido)).map(r => r.rg))].sort()
+      [...new Set(RAW.filter(r => !sido || r.sd === sido).map(r => r.sg))]
+        .sort((a, b) => a.localeCompare(b, "ko"))
         .forEach(g => sgg.appendChild(new Option(g, g)));
     };
+    sel.onchange = () => { fillSgg(); renderRaw(); };
     fillSgg();
     for (const id of ["r-sgg", "r-price", "r-src"]) document.getElementById(id).onchange = renderRaw;
     document.getElementById("r-q").oninput = () => { clearTimeout(window._rq); window._rq = setTimeout(renderRaw, 250); };
@@ -700,7 +774,7 @@ function rawFiltered() {
   const src = document.getElementById("r-src").value;
   const q = document.getElementById("r-q").value.trim();
   return RAW.filter(r =>
-    (!sido || r.rg.startsWith(sido)) && (!sgg || r.rg === sgg) && (!src || r.src === src)
+    (!sido || r.sd === sido) && (!sgg || r.sg === sgg) && (!src || r.src === src)
     && (minP === 0 || r.src === "DART" || (r.p || 0) >= minP)   // DART는 금액 개념 없음 → 통과
     && (!q || r.t.includes(q) || r.org.includes(q))
   ).sort((a, b) => b.d.localeCompare(a.d));
@@ -714,7 +788,7 @@ function renderRaw(more) {
   list.innerHTML = rows.slice(0, rawShown).map(r => `
     <div class="rrow">
       <div class="rt">${r.t}</div>
-      <div class="rm">${r.d} · <b>${r.rg}</b> · ${r.org} · ${r.src}${r.p ? ` · <b>${(r.p / 1e8).toFixed(1)}억</b>` : ""}
+      <div class="rm">${r.d} · <b>${SIDO_LABEL[r.sd] || r.sd} ${r.sg}</b> · ${r.org} · ${r.src}${r.p ? ` · <b>${(r.p / 1e8).toFixed(1)}억</b>` : ""}
         ${r.kw ? ` · ${r.kw}` : ""} · <a href="${r.u}" target="_blank">원문</a></div>
     </div>`).join("");
   document.getElementById("r-more").style.display = rows.length > rawShown ? "inline-block" : "none";
@@ -722,12 +796,16 @@ function renderRaw(more) {
 
 /* ══════════ 부트 ══════════ */
 (async () => {
-  const [dong, main, macro] = await Promise.all([
-    fetch("gangseo_bdong.geojson").then(r => r.json()),   // 법정동 (§3.1: 발행·동매핑은 법정동 기준)
+  const [dong, sgg, main, macro, rawData] = await Promise.all([
+    fetch("seoul_bdong.geojson").then(r => r.json()),     // 서울 전체 법정동 467 (§3.1 법정동 기준)
+    fetch("sgg_capital.geojson").then(r => r.json()),     // 수도권 시군구 79
     fetch("signals.json").then(r => r.json()),
-    fetch("macro_signals_draft.json").then(r => r.json())
+    fetch("macro_signals_draft.json").then(r => r.json()),
+    fetch("capital_raw.json").then(r => r.json())
   ]);
   DONG_GEO = dong;
+  SGG_GEO = sgg;
+  RAW = rawData.rows;
   // 상태 파생 (§3.1: 정체 = 6개월+ 무움직임). status_override는 공사 진행 등
   // "무공시가 정상인 단계"에 한해 명시 근거(status_note)와 함께 사용
   SIGNALS = main.signals.map(s => {
