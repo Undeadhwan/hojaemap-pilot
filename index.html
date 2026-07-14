@@ -20,12 +20,27 @@
   .chip { font-size:12px; border:1px solid var(--line); border-radius:999px; padding:3px 10px; cursor:pointer; user-select:none; color:var(--muted); }
   .chip.on { border-color:var(--ink); color:var(--ink); font-weight:600; }
   #wrap { display:flex; height:calc(100vh - 87px); }
-  #tree { width:230px; flex-shrink:0; border-right:1px solid var(--line); overflow-y:auto; padding:8px 0 60px; font-size:13px; }
+  #tree { width:264px; flex-shrink:0; border-right:1px solid var(--line); overflow-y:auto; padding:0 0 60px; font-size:13px; }
   #map { flex:1; min-width:0; }
   #panel { width:440px; flex-shrink:0; border-left:1px solid var(--line); overflow-y:auto; padding:14px 16px 60px; position:relative; }
+  /* 아실식 브레드크럼 + 격자 선택 */
+  .bc { display:flex; align-items:center; flex-wrap:wrap; gap:2px; padding:12px 12px 10px; font-size:12.5px; border-bottom:1px solid var(--line); background:#fafbfc; position:sticky; top:0; z-index:4; }
+  .bc span.seg { color:var(--accent); cursor:pointer; font-weight:600; }
+  .bc span.seg.ph { color:var(--muted); font-weight:400; cursor:default; }
+  .bc span.sep { color:#c7c7cc; margin:0 2px; }
+  .ggrid { display:grid; grid-template-columns:1fr 1fr; }
+  .gcell { padding:10px 8px 10px 12px; border-bottom:1px solid var(--line); border-right:1px solid var(--line);
+           cursor:pointer; font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .gcell:nth-child(2n) { border-right:none; }
+  .gcell:hover { background:#f2f2f7; }
+  .gcell.sel { background:#e8f0fe; color:#1a4d8f; font-weight:700; }
+  .gcell .gc { color:var(--muted); font-weight:400; font-size:11px; }
+  .gnote { padding:10px 12px; font-size:11px; color:var(--muted); }
   /* 연도 버튼 + 카드 미니 진행바 */
-  .ybar { display:flex; align-items:center; gap:4px; flex-wrap:wrap; margin:2px 0 12px; }
-  .ybar .ylbl { font-size:11px; color:var(--muted); margin-right:2px; }
+  .ybar { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; overflow-x:auto;
+          position:sticky; top:0; z-index:6; background:#fff; margin:0 -16px 12px; padding:8px 16px; border-bottom:1px solid var(--line); }
+  .ybar .ylbl { font-size:11px; color:var(--muted); margin-right:2px; flex-shrink:0; }
+  .ybtn { flex-shrink:0; }
   .ybtn { font-size:12px; padding:4px 9px; border:1px solid var(--line); border-radius:8px; cursor:pointer; background:#fff; color:var(--muted); }
   .ybtn.on { border-color:#c4392f; color:#c4392f; font-weight:700; background:#fff5f4; }
   .mbar { margin-top:8px; }
@@ -348,9 +363,10 @@ function fillRegionSelect() {
   sel.onchange = () => { filter.region = sel.value; renderAll(); };
 }
 
-/* ══════════ 좌측 4레벨 계층 트리 (시도>시군구>동>아파트) ══════════ */
+/* ══════════ 좌측 4레벨 선택 (아실식 브레드크럼 + 격자): 시도>시군구>동>단지 ══════════ */
 const SIDO_LONG = { "서울": "서울특별시", "경기": "경기도", "인천": "인천광역시" };
-const treeState = { open: new Set(["서울"]), selKey: null };
+const treeState = { selKey: null };        // 지도 마커 연동용(기존 참조 유지)
+const nav = { sd: null, sg: null, dong: null };   // 현재 드릴다운 위치
 function dongsOfSgg(sd, sg) {
   return DONG_GEO.features.filter(f => f.properties.sgg === sg)
     .map(f => f.properties.EMD_KOR_NM).sort((a, b) => a.localeCompare(b, "ko"));
@@ -360,75 +376,71 @@ function aptsOfDong(sg, dong) {
 }
 /* 지역 단위 신호 수(영향권): 시군구=태그, 동=dongRelation, 아파트=반경 */
 function sigCountRegion(sd, sg) { return SIGNALS.filter(visible).filter(s => s.sd === sd && s.sg === sg).length; }
+function bcSeg(label, onclickJs, ph) {
+  return `<span class="seg ${ph ? "ph" : ""}" ${onclickJs ? `onclick="${onclickJs}"` : ""}>${label}</span>`;
+}
 function buildTree() {
   const el = document.getElementById("tree");
-  const sidos = [...new Set(SIGNALS.map(s => s.sd))]
-    .concat("경기", "인천").filter((v, i, a) => a.indexOf(v) === i);
-  const order = ["서울", "경기", "인천"];
-  let html = "";
-  order.filter(s => sidos.includes(s)).forEach(sd => {
-    const openSido = treeState.open.has(sd);
-    html += `<div class="tnode"><div class="trow" data-t="sido" data-sd="${sd}">
-      <span class="tw">${openSido ? "▾" : "▸"}</span>${SIDO_LONG[sd] || sd}</div>`;
-    if (openSido) {
-      html += `<div class="tchild">`;
-      // 신호 있는 시군구 우선, 없으면 전체(서울만 동까지)
-      const sgset = [...new Set(SIGNALS.filter(s => s.sd === sd).map(s => s.sg))].sort((a, b) => a.localeCompare(b, "ko"));
-      const sggAll = sd === "서울" ? [...new Set(DONG_GEO.features.map(f => f.properties.sgg))].sort((a, b) => a.localeCompare(b, "ko")) : sgset;
-      sggAll.forEach(sg => {
-        const key = `${sd}|${sg}`;
-        const openSgg = treeState.open.has(key);
-        const cnt = sigCountRegion(sd, sg);
-        html += `<div class="tnode"><div class="trow ${treeState.selKey === key ? "sel" : ""}" data-t="sgg" data-sd="${sd}" data-sg="${sg}">
-          <span class="tw">${sd === "서울" ? (openSgg ? "▾" : "▸") : ""}</span>${sg}<span class="tc">${cnt || ""}</span></div>`;
-        if (openSgg && sd === "서울") {
-          html += `<div class="tchild">`;
-          dongsOfSgg(sd, sg).forEach(dong => {
-            const dkey = `${sd}|${sg}|${dong}`;
-            const openD = treeState.open.has(dkey);
-            const f = DONG_GEO.features.find(x => x.properties.sgg === sg && x.properties.EMD_KOR_NM === dong);
-            const dc = f ? SIGNALS.filter(visible).filter(s => dongRelation(s, f)).length : 0;
-            const na = aptsOfDong(sg, dong).length;
-            html += `<div class="tnode"><div class="trow ${treeState.selKey === dkey ? "sel" : ""}" data-t="dong" data-sd="${sd}" data-sg="${sg}" data-dong="${dong}">
-              <span class="tw">${na ? (openD ? "▾" : "▸") : ""}</span>${dong}<span class="tc">${dc || ""}</span></div>`;
-            if (openD) {
-              html += `<div class="tchild">`;
-              aptsOfDong(sg, dong).forEach(a => {
-                const akey = `apt|${a.n}|${dong}`;
-                html += `<div class="trow tapt ${treeState.selKey === akey ? "sel" : ""}" data-t="apt" data-apt="${a.n}" data-dong="${dong}">${a.n}</div>`;
-              });
-              html += `</div>`;
-            }
-            html += `</div>`;
-          });
-          html += `</div>`;
-        }
-        html += `</div>`;
+  // ── 브레드크럼 (아실: 시도 선택 > 시군구 선택 > 읍면동 선택)
+  let bc = bcSeg(nav.sd ? (SIDO_LONG[nav.sd] || nav.sd) : "시도 선택", nav.sd ? "navTo()" : null, !nav.sd);
+  bc += `<span class="sep">›</span>` + bcSeg(nav.sg || "시군구 선택", nav.sg ? `navTo('${nav.sd}')` : null, !nav.sg);
+  bc += `<span class="sep">›</span>` + bcSeg(nav.dong || "읍면동 선택", nav.dong ? `navTo('${nav.sd}','${nav.sg}')` : null, !nav.dong);
+  let html = `<div class="bc">${bc}</div>`;
+  // ── 현재 레벨 격자
+  let cells = "";
+  if (!nav.sd) {
+    ["서울", "경기", "인천"].forEach(sd => {
+      const n = SIGNALS.filter(visible).filter(s => s.sd === sd).length;
+      cells += `<div class="gcell" onclick="navPick('sd','${sd}')">${SIDO_LONG[sd]} <span class="gc">${n ? "(" + n + ")" : ""}</span></div>`;
+    });
+  } else if (!nav.sg) {
+    const list = nav.sd === "서울"
+      ? [...new Set(DONG_GEO.features.map(f => f.properties.sgg))].sort((a, b) => a.localeCompare(b, "ko"))
+      : [...new Set(SGG_GEO.features.filter(f => f.properties.sido === nav.sd).map(f => sggDisplayName(f.properties.name)))].sort((a, b) => a.localeCompare(b, "ko"));
+    list.forEach(sg => {
+      const n = sigCountRegion(nav.sd, sg);
+      cells += `<div class="gcell ${treeState.selKey === `${nav.sd}|${sg}` ? "sel" : ""}" onclick="navPick('sg','${sg}')">${sg} <span class="gc">${n ? "(" + n + ")" : ""}</span></div>`;
+    });
+  } else if (!nav.dong) {
+    if (nav.sd !== "서울") {
+      html += `<div class="gnote">경기·인천은 동 경계 데이터 확보 전 — 시군구 피드까지 제공됩니다</div>`;
+    } else {
+      dongsOfSgg(nav.sd, nav.sg).forEach(dong => {
+        const f = DONG_GEO.features.find(x => x.properties.sgg === nav.sg && x.properties.EMD_KOR_NM === dong);
+        const n = f ? SIGNALS.filter(visible).filter(s => dongRelation(s, f)).length : 0;
+        cells += `<div class="gcell ${treeState.selKey === `${nav.sd}|${nav.sg}|${dong}` ? "sel" : ""}" onclick="navPick('dong','${dong}')">${dong} <span class="gc">${n ? "(" + n + ")" : ""}</span></div>`;
       });
-      html += `</div>`;
     }
-    html += `</div>`;
-  });
-  el.innerHTML = html;
-  el.querySelectorAll(".trow").forEach(row => {
-    row.onclick = (e) => { e.stopPropagation(); onTreeClick(row.dataset); };
-  });
+  } else {
+    const apts = aptsOfDong(nav.sg, nav.dong);
+    if (!apts.length) html += `<div class="gnote">이 동의 단지 데이터 없음 (파일럿: 강서구 일부 — Phase 1에서 공동주택 공공데이터로 확충)</div>`;
+    apts.forEach(a => {
+      const n = signalsNearPoint([a.lon, a.lat]).length;
+      cells += `<div class="gcell ${treeState.selKey === `apt|${a.n}|${a.dong}` ? "sel" : ""}" onclick="navPick('apt','${a.n.replace(/'/g, "\\'")}')">${a.n} <span class="gc">${n ? "(" + n + ")" : ""}</span></div>`;
+    });
+  }
+  el.innerHTML = html + `<div class="ggrid">${cells}</div>`;
 }
-function toggle(key) { treeState.open.has(key) ? treeState.open.delete(key) : treeState.open.add(key); }
-function onTreeClick(d) {
-  if (d.t === "sido") { toggle(d.sd); buildTree(); return; }
-  if (d.t === "sgg") {
-    if (d.sd === "서울") toggle(`${d.sd}|${d.sg}`);
-    treeState.selKey = `${d.sd}|${d.sg}`;
-    buildTree(); showSgg(`${d.sd} ${d.sg}`);   // 피드로 표시(지도 전체 핀은 유지)
-  } else if (d.t === "dong") {
-    toggle(`${d.sd}|${d.sg}|${d.dong}`);
-    treeState.selKey = `${d.sd}|${d.sg}|${d.dong}`;
-    const f = DONG_GEO.features.find(x => x.properties.sgg === d.sg && x.properties.EMD_KOR_NM === d.dong);
-    buildTree(); if (f) { showDong(f); if (window._map) window._map.setView([+f._c ? f._c[1] : 37.55, 126.84], 14); }
-  } else if (d.t === "apt") {
-    treeState.selKey = `apt|${d.apt}|${d.dong}`;
-    const a = APTS.find(x => x.n === d.apt && x.dong === d.dong);
+/* 브레드크럼 상위로 이동 */
+function navTo(sd, sg) {
+  nav.sd = sd || null; nav.sg = sg || null; nav.dong = null;
+  buildTree();
+}
+/* 격자 셀 선택 → 드릴다운 + 우측/지도 연동 */
+function navPick(level, val) {
+  if (level === "sd") { nav.sd = val; nav.sg = null; nav.dong = null; buildTree(); return; }
+  if (level === "sg") {
+    nav.sg = val; nav.dong = null;
+    treeState.selKey = `${nav.sd}|${val}`;
+    buildTree(); showSgg(`${nav.sd} ${val}`);
+  } else if (level === "dong") {
+    nav.dong = val;
+    treeState.selKey = `${nav.sd}|${nav.sg}|${val}`;
+    const f = DONG_GEO.features.find(x => x.properties.sgg === nav.sg && x.properties.EMD_KOR_NM === val);
+    buildTree(); if (f) showDong(f);
+  } else if (level === "apt") {
+    treeState.selKey = `apt|${val}|${nav.dong}`;
+    const a = APTS.find(x => x.n === val && x.dong === nav.dong);
     buildTree(); if (a) showApt(a);
   }
 }
@@ -463,7 +475,7 @@ function renderApt(a) {
 
 /* 연도 버튼 (타임라인 통합) — 각 카드의 진행바에 기준선을 긋는다 */
 function yearChipsHtml() {
-  const yrs = [2026, 2027, 2028, 2029, 2030, 2031, 2032, 2033];
+  const yrs = [2026, 2027, 2028, 2029, 2030, 2031, 2032];
   return `<div class="ybar"><span class="ylbl">시점</span>
     <span class="ybtn ${YEAR_SEL === null ? "on" : ""}" data-y="">전체</span>
     ${yrs.map(y => `<span class="ybtn ${YEAR_SEL === y ? "on" : ""}" data-y="${y}">'${String(y).slice(2)}</span>`).join("")}</div>`;
