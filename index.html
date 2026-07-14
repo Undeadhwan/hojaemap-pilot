@@ -602,6 +602,13 @@ function initLeaflet() {
     }
   };
   map.on("zoomend moveend", applyLOD);
+  // 지도 여백(타일)만 클릭 → 선택 해제 + 반경 원 제거.
+  // 피처(폴리곤·핀=path, 뱃지=marker-pane)는 자체 핸들러가 처리하므로 제외
+  map.on("click", (e) => {
+    const t = e.originalEvent && e.originalEvent.target;
+    if (t && (t.tagName === "path" || t.closest?.(".leaflet-marker-pane"))) return;
+    goHome();
+  });
   window._dbg = { applyLOD, renderSggBadges, renderDongBadges, get badges() { return badges; } };
 
   const refreshPins = () => {
