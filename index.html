@@ -217,7 +217,7 @@ const INFLUENCE = {
 const getRadius = s => s.radius_m || INFLUENCE[s.template_type]?.[s.scale] || RADIUS_BY_SCALE[s.scale] || 800;
 
 /* ══════════ 상태 ══════════ */
-let DONG_GEO = null, SGG_GEO = null, SIGNALS = [], MACRO = [];
+let DONG_GEO = null, SGG_GEO = null, SIGNALS = [], MACRO = [], AUTO = [];
 const RAW_BADGE_CUT = 500000000;  // 시군구 뱃지 집계의 원시공고 금액 하한 (5억)
 /* 대도시 분할구(고양시덕양구 등) → 시 단위 표시명 */
 function sggDisplayName(name) {
@@ -424,15 +424,15 @@ function renderSggFeed(disp) {
   const p = document.getElementById("panel");
   const curated = SIGNALS.filter(visible)
     .filter(s => signalPoints(s).some(pt => pointInSgg(pt.coord, disp)));
-  const rawAll = (RAW || []).filter(r => `${r.sd} ${r.sg}` === disp);
-  const rawCut = rawAll.filter(r => r.src === "DART" || (r.p || 0) >= RAW_BADGE_CUT);
+  const cands = (AUTO || []).filter(a => `${a.sd} ${a.sg}` === disp);
+  const rawN = (RAW || []).filter(r => `${r.sd} ${r.sg}` === disp).length;
   p.innerHTML = `
     <span class="back" onclick="goHome()">← 지도 전체</span>
     <div class="pt">${disp}</div>
-    <div class="ps">큐레이션 신호 ${curated.length}건 · 원시 공고/공시 ${rawCut.length}건(5억+·DART) — 전체 원시 ${rawAll.length}건</div>
+    <div class="ps">확정 신호 ${curated.length}건 · 후보 신호(자동 통합) ${cands.length}건 — 원시 공고 ${rawN}건에서 생성</div>
     <div id="list"></div>
-    ${rawCut.length ? `<div class="group-h">원시 공고/공시 (5억+·DART, 최신순 — 신호 아님·큐레이션 대기)</div><div id="rawlist"></div>
-      <div style="margin:10px 0"><span class="chip" onclick="gotoRaw('${disp}')">수도권 데이터 탭에서 전체 보기 →</span></div>` : ""}`;
+    ${cands.length ? `<div class="group-h">후보 신호 (자동 생성 — 5억+·DART, 중복 통합, 단계는 추정)</div><div id="candlist"></div>
+      <div style="margin:10px 0"><span class="chip" onclick="gotoRaw('${disp}')">원시 공고 전체 보기 →</span></div>` : ""}`;
   const list = p.querySelector("#list");
   curated.sort((a, b) => (b.last_movement || "").localeCompare(a.last_movement || ""))
     .forEach(s => {
@@ -441,12 +441,14 @@ function renderSggFeed(disp) {
       el.onclick = () => showSignal(s, true);
       list.appendChild(el);
     });
-  const rl = p.querySelector("#rawlist");
-  if (rl) rawCut.sort((a, b) => b.d.localeCompare(a.d)).slice(0, 30).forEach(r => {
-    rl.insertAdjacentHTML("beforeend", `
+  const cl = p.querySelector("#candlist");
+  if (cl) cands.sort((a, b) => b.last_seen.localeCompare(a.last_seen)).slice(0, 40).forEach(a => {
+    cl.insertAdjacentHTML("beforeend", `
       <div class="rrow">
-        <div class="rt">${r.t}</div>
-        <div class="rm">${r.d} · ${r.org} · ${r.src}${r.p ? ` · <b>${(r.p / 1e8).toFixed(1)}억</b>` : ""} · <a href="${r.u}" target="_blank">원문</a></div>
+        <div class="rt">${a.title}</div>
+        <div class="rm">${a.stage_guess} · ${a.first_seen}${a.n_notices > 1 ? `~${a.last_seen} · 공고 ${a.n_notices}건 통합` : ""}
+          ${a.price ? ` · <b>${(a.price / 1e8).toFixed(1)}억</b>` : ""}${a.dong ? ` · 위치추출: ${a.jibun || a.dong}` : ""}
+          · ${a.src} · ${a.sources.map((u, i) => `<a href="${u}" target="_blank">원문${a.sources.length > 1 ? i + 1 : ""}</a>`).join(" ")}</div>
       </div>`);
   });
 }
@@ -554,10 +556,19 @@ function initLeaflet() {
       badges.push(b);
     }
   };
-  // 동 뱃지: 뷰포트 내 + 큐레이션 소재 개수
+  // 동 뱃지: 뷰포트 내 + 큐레이션 소재 개수 + 후보 신호(자동, 동 대표점 폴백) 회색 마커
   const renderDongBadges = () => {
     clearBadges();
     const bd = map.getBounds();
+    (AUTO || []).filter(a => a.coords_fallback && bd.contains([a.coords_fallback[1], a.coords_fallback[0]]))
+      .slice(0, 60).forEach(a => {
+        const m2 = L.circleMarker([a.coords_fallback[1], a.coords_fallback[0]], {
+          radius: 5, color: "#8e8e93", weight: 1.5, dashArray: "2 2", fillColor: "#f2f2f7", fillOpacity: .9
+        }).addTo(map);
+        m2.bindTooltip(`후보(자동): ${a.title.slice(0, 40)} — 위치: ${a.dong} 대표점(폴백)`, { direction: "right", offset: [8, 0] });
+        m2.on("click", () => showSgg(`${a.sd} ${a.sg}`));
+        badges.push(m2);
+      });
     let shown = 0;
     for (const f of DONG_GEO.features) {
       if (shown > 120) break;
@@ -851,16 +862,18 @@ function renderRaw(more) {
 
 /* ══════════ 부트 ══════════ */
 (async () => {
-  const [dong, sgg, main, macro, rawData] = await Promise.all([
+  const [dong, sgg, main, macro, rawData, autoData] = await Promise.all([
     fetch("seoul_bdong.geojson").then(r => r.json()),     // 서울 전체 법정동 467 (§3.1 법정동 기준)
     fetch("sgg_capital.geojson").then(r => r.json()),     // 수도권 시군구 79
     fetch("signals.json").then(r => r.json()),
     fetch("macro_signals_draft.json").then(r => r.json()),
-    fetch("capital_raw.json").then(r => r.json())
+    fetch("capital_raw.json").then(r => r.json()),
+    fetch("signals_auto.json").then(r => r.json())
   ]);
   DONG_GEO = dong;
   SGG_GEO = sgg;
   RAW = rawData.rows;
+  AUTO = autoData.candidates;
   // 상태 파생 (§3.1: 정체 = 6개월+ 무움직임). status_override는 공사 진행 등
   // "무공시가 정상인 단계"에 한해 명시 근거(status_note)와 함께 사용
   SIGNALS = main.signals.map(s => {
