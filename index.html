@@ -500,6 +500,9 @@ function initLeaflet() {
   // 컨테이너 크기 변동 대응 (초기 0크기·모바일 회전 등)
   setTimeout(() => map.invalidateSize(), 300);
   new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById("map"));
+  // 신호 핀이 동 폴리곤에 클릭을 뺏기지 않도록 전용 상위 pane
+  map.createPane("cand").style.zIndex = 640;
+  map.createPane("sig").style.zIndex = 650;
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     { maxZoom: 19, attribution: "&copy; OpenStreetMap — 임시 베이스맵 (카카오맵 승인 시 전환)" }).addTo(map);
   const DONG_ZOOM = 12;   // 이 줌 이상 = 동 레벨, 미만 = 시군구 레벨
@@ -563,7 +566,7 @@ function initLeaflet() {
     (AUTO || []).filter(a => a.coords_fallback && bd.contains([a.coords_fallback[1], a.coords_fallback[0]]))
       .slice(0, 60).forEach(a => {
         const m2 = L.circleMarker([a.coords_fallback[1], a.coords_fallback[0]], {
-          radius: 5, color: "#8e8e93", weight: 1.5, dashArray: "2 2", fillColor: "#f2f2f7", fillOpacity: .9
+          pane: "cand", radius: 5, color: "#8e8e93", weight: 1.5, dashArray: "2 2", fillColor: "#f2f2f7", fillOpacity: .9
         }).addTo(map);
         m2.bindTooltip(`후보(자동): ${a.title.slice(0, 40)} — 위치: ${a.dong} 대표점(폴백)`, { direction: "right", offset: [8, 0] });
         m2.on("click", () => showSgg(`${a.sd} ${a.sg}`));
@@ -604,7 +607,7 @@ function initLeaflet() {
       pts.forEach((p, k) => {
         const [x, y] = p.coord;
         const m = L.circleMarker([y, x], {
-          radius: p.name ? 7 : 9, color: "#12263f", weight: p.cand ? 2 : 3,
+          pane: "sig", radius: p.name ? 7 : 9, color: "#12263f", weight: p.cand ? 2 : 3,
           dashArray: p.cand ? "3 3" : null,               // ◌ 후보 표기(§4.1 문법)
           fillColor: "#fff", fillOpacity: 1,
           opacity: sg.status === "정체" ? .45 : 1
