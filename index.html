@@ -15,7 +15,7 @@
   header { display:flex; align-items:center; gap:14px; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
   header .logo { font-weight:800; font-size:17px; letter-spacing:-.3px; }
   header .logo small { font-weight:400; color:var(--muted); font-size:11px; margin-left:4px; }
-  header .region { font-size:13px; border:1px solid var(--line); border-radius:8px; padding:4px 10px; }
+  header .region { font-size:13px; border:1px solid var(--line); border-radius:8px; padding:4px 10px; background:#fff; }
   .chips { display:flex; gap:6px; flex-wrap:wrap; }
   .chip { font-size:12px; border:1px solid var(--line); border-radius:999px; padding:3px 10px; cursor:pointer; user-select:none; color:var(--muted); }
   .chip.on { border-color:var(--ink); color:var(--ink); font-weight:600; }
@@ -69,7 +69,7 @@
 <body>
 <header>
   <div class="logo">호재맵<small>가칭 · 신호 추적 미디어 (내부 v0)</small></div>
-  <div class="region">지역: 강서구</div>
+  <select class="region" id="f-region"><option value="">지역: 전체</option></select>
   <div class="chips" id="f-view">
     <span class="chip on" id="v-map">지도</span>
     <span class="chip" id="v-gantt">타임라인</span>
@@ -227,7 +227,8 @@ function sggDisplayName(name) {
 const filter = {
   cat: new Set(Object.keys(DISPLAY_CAT)),
   scale: new Set(["광역", "지구", "근린"]),
-  status: new Set(["활성", "정체"])
+  status: new Set(["활성", "정체", "종결"]),
+  region: ""   // "" = 전체, "서울 강서구" 형태
 };
 let view = { mode: "home", dong: null, signal: null };
 let mapApi = null;   // {panTo(lnglat), refreshPins()}
@@ -235,7 +236,8 @@ let mapApi = null;   // {panTo(lnglat), refreshPins()}
 /* ══════════ 유틸 ══════════ */
 const catOf = s => Object.keys(DISPLAY_CAT).find(k => DISPLAY_CAT[k].includes(s.template_type)) || "기타(템플릿 미정)";
 const visible = s => (catOf(s).startsWith("기타") || filter.cat.has(catOf(s)))
-  && filter.scale.has(s.scale) && filter.status.has(s.status || "활성");
+  && filter.scale.has(s.scale) && filter.status.has(s.status || "활성")
+  && (!filter.region || `${s.sd} ${s.sg}` === filter.region);
 function weeksAgo(d) {
   if (!d) return null;
   const t = new Date(d.length === 7 ? d + "-01" : d);
@@ -300,7 +302,13 @@ function renderChips() {
   };
   mk(document.getElementById("f-cat"), Object.keys(DISPLAY_CAT), filter.cat);
   mk(document.getElementById("f-scale"), ["광역", "지구", "근린"], filter.scale);
-  mk(document.getElementById("f-status"), ["활성", "정체"], filter.status);
+  mk(document.getElementById("f-status"), ["활성", "정체", "종결"], filter.status);
+}
+function fillRegionSelect() {
+  const sel = document.getElementById("f-region");
+  const regions = [...new Set(SIGNALS.map(s => `${s.sd} ${s.sg}`))].sort((a, b) => a.localeCompare(b, "ko"));
+  regions.forEach(r => sel.appendChild(new Option(r, r)));
+  sel.onchange = () => { filter.region = sel.value; renderAll(); };
 }
 
 /* ══════════ 패널: 홈 ══════════ */
@@ -322,7 +330,7 @@ function renderHome() {
     .sort((a, b) => (b.last_movement || "").localeCompare(a.last_movement || ""));
   const recent = shown.filter(s => weeksAgo(s.last_movement) === 0);
   p.innerHTML = `
-    <div class="pt">큐레이션 신호 ${shown.length}건 <span style="font-weight:400;font-size:11px;color:var(--muted)">(현재 강서 중심 — 수도권 원시층은 [수도권 데이터] 탭)</span></div>
+    <div class="pt">큐레이션 신호 ${shown.length}건 <span style="font-weight:400;font-size:11px;color:var(--muted)">${filter.region || "전 지역"} — 수도권 원시층은 [수도권 데이터] 탭</span></div>
     <div class="ps">정렬: 최근 움직임순 (점수·중요도 정렬 없음) · 지도 축소 = 시군구 집계(원시 5억+ 포함), 확대 = 서울 법정동</div>
     <div class="summary"><b>이번 주 변동</b> — ${
       recent.length ? recent.map(s => s.title).join(" · ")
@@ -900,6 +908,7 @@ function renderRaw(more) {
   });
   MACRO = macro.signals;
   renderChips();
+  fillRegionSelect();
   renderPanel();
   bootMap();
   document.getElementById("v-map").onclick = () => setView("map");
