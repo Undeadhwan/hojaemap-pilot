@@ -463,7 +463,12 @@ function gotoRaw(disp) {
 
 /* ══════════ 뷰 전환 ══════════ */
 function goHome() { view = { mode: "home" }; renderPanel(); mapApi?.clearRadius(); }
-function showDong(f) { view = { mode: "dong", dong: f }; renderPanel(); mapApi?.clearRadius(); }
+function showDong(f) {
+  view = { mode: "dong", dong: f }; renderPanel();
+  // 이 동 영향권 신호들의 반경을 전부 표시 (왜 이 동이 영향권인지 시각화)
+  const rel = SIGNALS.filter(visible).filter(s => dongRelation(s, f));
+  mapApi?.showRadiusMany(rel);
+}
 function showSignal(s, pan) {
   view = { mode: "detail", signal: s }; renderPanel();
   if (pan && s._pan) s._pan();
@@ -622,8 +627,7 @@ function initLeaflet() {
   };
   let circles = [];
   const clearRadius = () => { circles.forEach(c => map.removeLayer(c)); circles = []; };
-  const showRadius = s => {
-    clearRadius();
+  const addRadius = s => {
     signalPoints(s).forEach(p => {
       circles.push(L.circle([p.coord[1], p.coord[0]], {
         radius: getRadius(s), color: "#12263f", weight: 1.5, dashArray: "6 5",
@@ -631,7 +635,9 @@ function initLeaflet() {
       }).addTo(map));
     });
   };
-  mapApi = { refreshPins, panTo: ll => map.panTo([ll[1], ll[0]]), showRadius, clearRadius };
+  const showRadius = s => { clearRadius(); addRadius(s); };
+  const showRadiusMany = list => { clearRadius(); list.forEach(addRadius); };
+  mapApi = { refreshPins, panTo: ll => map.panTo([ll[1], ll[0]]), showRadius, showRadiusMany, clearRadius };
   refreshPins();
 }
 function initKakao() {
@@ -671,8 +677,7 @@ function initKakao() {
   };
   let circles = [];
   const clearRadius = () => { circles.forEach(c => c.setMap(null)); circles = []; };
-  const showRadius = s => {
-    clearRadius();
+  const addRadius = s => {
     signalPoints(s).forEach(p => {
       circles.push(new kakao.maps.Circle({
         map, center: new kakao.maps.LatLng(p.coord[1], p.coord[0]), radius: getRadius(s),
@@ -681,7 +686,9 @@ function initKakao() {
       }));
     });
   };
-  mapApi = { refreshPins, panTo: ll => map.panTo(new kakao.maps.LatLng(ll[1], ll[0])), showRadius, clearRadius };
+  const showRadius = s => { clearRadius(); addRadius(s); };
+  const showRadiusMany = list => { clearRadius(); list.forEach(addRadius); };
+  mapApi = { refreshPins, panTo: ll => map.panTo(new kakao.maps.LatLng(ll[1], ll[0])), showRadius, showRadiusMany, clearRadius };
   refreshPins();
 }
 
