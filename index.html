@@ -604,9 +604,7 @@ function gotoRaw(disp) {
 function goHome() { view = { mode: "home" }; renderPanel(); mapApi?.clearRadius(); }
 function showDong(f) {
   view = { mode: "dong", dong: f }; renderPanel();
-  // 이 동 영향권 신호들의 반경을 전부 표시 (왜 이 동이 영향권인지 시각화)
-  const rel = SIGNALS.filter(visible).filter(s => dongRelation(s, f));
-  mapApi?.showRadiusMany(rel);
+  mapApi?.clearRadius();   // 반경 원은 개별 신호 클릭 시에만 (다중 원은 산만)
 }
 function showSignal(s, pan) {
   view = { mode: "detail", signal: s }; renderPanel();
@@ -804,7 +802,7 @@ function initLeaflet() {
     if (aptMarker) map.removeLayer(aptMarker);
     aptMarker = L.marker([a.lat, a.lon], { pane: "sig",
       icon: L.divIcon({ className: "", html: `<div class="dong-badge" style="border-color:#c4392f;color:#c4392f">◎ ${a.n}</div>`, iconSize: null }) }).addTo(map);
-    showRadiusMany(signalsNearPoint([a.lon, a.lat]).map(x => x.s));
+    clearRadius();   // 앵커 마커만, 다중 반경 원 없음
   };
   mapApi = { refreshPins, panTo: ll => map.panTo([ll[1], ll[0]]), showRadius, showRadiusMany, clearRadius, showAptAnchor };
   refreshPins();
