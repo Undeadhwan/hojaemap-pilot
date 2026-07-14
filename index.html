@@ -20,22 +20,24 @@
   .chip { font-size:12px; border:1px solid var(--line); border-radius:999px; padding:3px 10px; cursor:pointer; user-select:none; color:var(--muted); }
   .chip.on { border-color:var(--ink); color:var(--ink); font-weight:600; }
   #wrap { display:flex; height:calc(100vh - 87px); }
-  #tree { width:264px; flex-shrink:0; border-right:1px solid var(--line); overflow-y:auto; padding:0 0 60px; font-size:13px; }
+  #tree { width:300px; flex-shrink:0; border-right:1px solid var(--line); overflow-y:auto; padding:0 0 60px; font-size:13px; }
   #map { flex:1; min-width:0; }
   #panel { width:440px; flex-shrink:0; border-left:1px solid var(--line); overflow-y:auto; padding:14px 16px 60px; position:relative; }
   /* 아실식 브레드크럼 + 격자 선택 */
-  .bc { display:flex; align-items:center; flex-wrap:wrap; gap:2px; padding:12px 12px 10px; font-size:12.5px; border-bottom:1px solid var(--line); background:#fafbfc; position:sticky; top:0; z-index:4; }
-  .bc span.seg { color:var(--accent); cursor:pointer; font-weight:600; }
-  .bc span.seg.ph { color:var(--muted); font-weight:400; cursor:default; }
-  .bc span.sep { color:#c7c7cc; margin:0 2px; }
+  .bc { display:flex; align-items:center; gap:4px; padding:14px 12px; font-size:14px; font-weight:700;
+        border-bottom:2px solid #2e5ce6; background:#f2f6ff; position:sticky; top:0; z-index:4; }
+  .bc span.seg { color:#2e5ce6; cursor:pointer; padding:2px 4px; border-radius:6px; }
+  .bc span.seg:not(.ph):hover { background:#e2ebff; }
+  .bc span.seg.ph { color:#9aa3b2; font-weight:500; cursor:default; }
+  .bc span.sep { color:#b9c4d8; margin:0 1px; font-weight:400; }
   .ggrid { display:grid; grid-template-columns:1fr 1fr; }
-  .gcell { padding:10px 8px 10px 12px; border-bottom:1px solid var(--line); border-right:1px solid var(--line);
-           cursor:pointer; font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .gcell { padding:15px 6px; border-bottom:1px solid var(--line); border-right:1px solid var(--line);
+           cursor:pointer; font-size:14px; text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .gcell:nth-child(2n) { border-right:none; }
-  .gcell:hover { background:#f2f2f7; }
-  .gcell.sel { background:#e8f0fe; color:#1a4d8f; font-weight:700; }
-  .gcell .gc { color:var(--muted); font-weight:400; font-size:11px; }
-  .gnote { padding:10px 12px; font-size:11px; color:var(--muted); }
+  .gcell:hover { background:#f2f6ff; color:#2e5ce6; }
+  .gcell.sel { background:#e2ebff; color:#2e5ce6; font-weight:800; }
+  .gcell .gc { color:var(--muted); font-weight:500; font-size:11.5px; }
+  .gnote { padding:12px; font-size:11.5px; color:var(--muted); }
   /* 연도 버튼 + 카드 미니 진행바 */
   .ybar { display:flex; align-items:center; gap:4px; flex-wrap:nowrap; overflow-x:auto;
           position:sticky; top:0; z-index:6; background:#fff; margin:0 -16px 12px; padding:8px 16px; border-bottom:1px solid var(--line); }
@@ -389,9 +391,9 @@ function buildTree() {
   // ── 현재 레벨 격자
   let cells = "";
   if (!nav.sd) {
+    // 시도 레벨: 개수 표기 없음 (시군구 레벨부터 표시)
     ["서울", "경기", "인천"].forEach(sd => {
-      const n = SIGNALS.filter(visible).filter(s => s.sd === sd).length;
-      cells += `<div class="gcell" onclick="navPick('sd','${sd}')">${SIDO_LONG[sd]} <span class="gc">${n ? "(" + n + ")" : ""}</span></div>`;
+      cells += `<div class="gcell" onclick="navPick('sd','${sd}')">${SIDO_LONG[sd]}</div>`;
     });
   } else if (!nav.sg) {
     const list = nav.sd === "서울"
