@@ -20,8 +20,19 @@
   .chip { font-size:12px; border:1px solid var(--line); border-radius:999px; padding:3px 10px; cursor:pointer; user-select:none; color:var(--muted); }
   .chip.on { border-color:var(--ink); color:var(--ink); font-weight:600; }
   #wrap { display:flex; height:calc(100vh - 87px); }
+  #tree { width:230px; flex-shrink:0; border-right:1px solid var(--line); overflow-y:auto; padding:8px 0 60px; font-size:13px; }
   #map { flex:1; min-width:0; }
-  #panel { width:400px; border-left:1px solid var(--line); overflow-y:auto; padding:14px 16px 60px; }
+  #panel { width:380px; flex-shrink:0; border-left:1px solid var(--line); overflow-y:auto; padding:14px 16px 60px; }
+  /* 계층 트리 */
+  .tnode { user-select:none; }
+  .trow { display:flex; align-items:center; gap:4px; padding:5px 8px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-radius:6px; }
+  .trow:hover { background:#f2f2f7; }
+  .trow.sel { background:#e8f0fe; color:#1a4d8f; font-weight:600; }
+  .trow .tw { display:inline-block; width:12px; color:var(--muted); font-size:10px; }
+  .trow .tc { color:var(--muted); font-size:11px; margin-left:auto; padding-left:6px; }
+  .tchild { margin-left:10px; border-left:1px solid var(--line); }
+  .tapt { color:#555; }
+  .tapt::before { content:"◦ "; color:var(--muted); }
   .pt { font-size:15px; font-weight:700; margin:4px 0 2px; }
   .ps { font-size:12px; color:var(--muted); margin-bottom:10px; }
   .back { font-size:12px; color:var(--accent); cursor:pointer; margin-bottom:8px; display:inline-block; }
@@ -80,6 +91,7 @@
   <div class="chips" id="f-status"></div>
 </header>
 <div id="wrap">
+  <nav id="tree"></nav>
   <div id="map"></div>
   <aside id="panel"></aside>
 </div>
@@ -217,7 +229,7 @@ const INFLUENCE = {
 const getRadius = s => s.radius_m || INFLUENCE[s.template_type]?.[s.scale] || RADIUS_BY_SCALE[s.scale] || 800;
 
 /* ══════════ 상태 ══════════ */
-let DONG_GEO = null, SGG_GEO = null, SIGNALS = [], MACRO = [], AUTO = [];
+let DONG_GEO = null, SGG_GEO = null, SIGNALS = [], MACRO = [], AUTO = [], APTS = [];
 const RAW_BADGE_CUT = 500000000;  // 시군구 뱃지 집계의 원시공고 금액 하한 (5억)
 /* 대도시 분할구(고양시덕양구 등) → 시 단위 표시명 */
 function sggDisplayName(name) {
@@ -309,6 +321,125 @@ function fillRegionSelect() {
   const regions = [...new Set(SIGNALS.map(s => `${s.sd} ${s.sg}`))].sort((a, b) => a.localeCompare(b, "ko"));
   regions.forEach(r => sel.appendChild(new Option(r, r)));
   sel.onchange = () => { filter.region = sel.value; renderAll(); };
+}
+
+/* ══════════ 좌측 4레벨 계층 트리 (시도>시군구>동>아파트) ══════════ */
+const SIDO_LONG = { "서울": "서울특별시", "경기": "경기도", "인천": "인천광역시" };
+const treeState = { open: new Set(["서울"]), selKey: null };
+function dongsOfSgg(sd, sg) {
+  return DONG_GEO.features.filter(f => f.properties.sgg === sg)
+    .map(f => f.properties.EMD_KOR_NM).sort((a, b) => a.localeCompare(b, "ko"));
+}
+function aptsOfDong(sg, dong) {
+  return APTS.filter(a => a.sg === sg && a.dong === dong).sort((a, b) => a.n.localeCompare(b.n, "ko"));
+}
+/* 지역 단위 신호 수(영향권): 시군구=태그, 동=dongRelation, 아파트=반경 */
+function sigCountRegion(sd, sg) { return SIGNALS.filter(visible).filter(s => s.sd === sd && s.sg === sg).length; }
+function buildTree() {
+  const el = document.getElementById("tree");
+  const sidos = [...new Set(SIGNALS.map(s => s.sd))]
+    .concat("경기", "인천").filter((v, i, a) => a.indexOf(v) === i);
+  const order = ["서울", "경기", "인천"];
+  let html = "";
+  order.filter(s => sidos.includes(s)).forEach(sd => {
+    const openSido = treeState.open.has(sd);
+    html += `<div class="tnode"><div class="trow" data-t="sido" data-sd="${sd}">
+      <span class="tw">${openSido ? "▾" : "▸"}</span>${SIDO_LONG[sd] || sd}</div>`;
+    if (openSido) {
+      html += `<div class="tchild">`;
+      // 신호 있는 시군구 우선, 없으면 전체(서울만 동까지)
+      const sgset = [...new Set(SIGNALS.filter(s => s.sd === sd).map(s => s.sg))].sort((a, b) => a.localeCompare(b, "ko"));
+      const sggAll = sd === "서울" ? [...new Set(DONG_GEO.features.map(f => f.properties.sgg))].sort((a, b) => a.localeCompare(b, "ko")) : sgset;
+      sggAll.forEach(sg => {
+        const key = `${sd}|${sg}`;
+        const openSgg = treeState.open.has(key);
+        const cnt = sigCountRegion(sd, sg);
+        html += `<div class="tnode"><div class="trow ${treeState.selKey === key ? "sel" : ""}" data-t="sgg" data-sd="${sd}" data-sg="${sg}">
+          <span class="tw">${sd === "서울" ? (openSgg ? "▾" : "▸") : ""}</span>${sg}<span class="tc">${cnt || ""}</span></div>`;
+        if (openSgg && sd === "서울") {
+          html += `<div class="tchild">`;
+          dongsOfSgg(sd, sg).forEach(dong => {
+            const dkey = `${sd}|${sg}|${dong}`;
+            const openD = treeState.open.has(dkey);
+            const f = DONG_GEO.features.find(x => x.properties.sgg === sg && x.properties.EMD_KOR_NM === dong);
+            const dc = f ? SIGNALS.filter(visible).filter(s => dongRelation(s, f)).length : 0;
+            const na = aptsOfDong(sg, dong).length;
+            html += `<div class="tnode"><div class="trow ${treeState.selKey === dkey ? "sel" : ""}" data-t="dong" data-sd="${sd}" data-sg="${sg}" data-dong="${dong}">
+              <span class="tw">${na ? (openD ? "▾" : "▸") : ""}</span>${dong}<span class="tc">${dc || ""}</span></div>`;
+            if (openD) {
+              html += `<div class="tchild">`;
+              aptsOfDong(sg, dong).forEach(a => {
+                const akey = `apt|${a.n}|${dong}`;
+                html += `<div class="trow tapt ${treeState.selKey === akey ? "sel" : ""}" data-t="apt" data-apt="${a.n}" data-dong="${dong}">${a.n}</div>`;
+              });
+              html += `</div>`;
+            }
+            html += `</div>`;
+          });
+          html += `</div>`;
+        }
+        html += `</div>`;
+      });
+      html += `</div>`;
+    }
+    html += `</div>`;
+  });
+  el.innerHTML = html;
+  el.querySelectorAll(".trow").forEach(row => {
+    row.onclick = (e) => { e.stopPropagation(); onTreeClick(row.dataset); };
+  });
+}
+function toggle(key) { treeState.open.has(key) ? treeState.open.delete(key) : treeState.open.add(key); }
+function onTreeClick(d) {
+  if (d.t === "sido") { toggle(d.sd); buildTree(); return; }
+  if (d.t === "sgg") {
+    if (d.sd === "서울") toggle(`${d.sd}|${d.sg}`);
+    treeState.selKey = `${d.sd}|${d.sg}`;
+    filter.region = `${d.sd} ${d.sg}`;
+    document.getElementById("f-region").value = filter.region;
+    buildTree(); showSgg(`${d.sd} ${d.sg}`);
+  } else if (d.t === "dong") {
+    toggle(`${d.sd}|${d.sg}|${d.dong}`);
+    treeState.selKey = `${d.sd}|${d.sg}|${d.dong}`;
+    const f = DONG_GEO.features.find(x => x.properties.sgg === d.sg && x.properties.EMD_KOR_NM === d.dong);
+    buildTree(); if (f) { showDong(f); if (window._map) window._map.setView([+f._c ? f._c[1] : 37.55, 126.84], 14); }
+  } else if (d.t === "apt") {
+    treeState.selKey = `apt|${d.apt}|${d.dong}`;
+    const a = APTS.find(x => x.n === d.apt && x.dong === d.dong);
+    buildTree(); if (a) showApt(a);
+  }
+}
+
+/* ══════════ 아파트 앵커: 단지 좌표 반경 내 신호 (§4.4 역방향 조회) ══════════ */
+function signalsNearPoint(coord) {
+  return SIGNALS.filter(visible).map(s => {
+    const d = Math.min(...(signalPoints(s).map(p => meters(coord, p.coord)) || [Infinity]));
+    return { s, dist: d, within: d <= getRadius(s) };
+  }).filter(x => x.within && isFinite(x.dist)).sort((a, b) => a.dist - b.dist);
+}
+function showApt(a) {
+  view = { mode: "apt", apt: a }; renderPanel();
+  if (window._map) { window._map.setView([a.lat, a.lon], 15); mapApi?.showAptAnchor?.(a); }
+}
+function renderApt(a) {
+  const p = document.getElementById("panel");
+  const near = signalsNearPoint([a.lon, a.lat]);
+  p.innerHTML = `
+    <span class="back" onclick="goHome()">← 지도 전체</span>
+    <div class="pt">${a.n}</div>
+    <div class="ps">${a.sd} ${a.sg} ${a.dong} · 이 단지에 영향 주는 신호 ${near.length}건 (거리순, 반경 내)</div>
+    <div id="list"></div>
+    <div class="note" style="border-top:1px dashed var(--line);margin-top:8px;padding-top:8px;font-size:11px;color:var(--muted)">
+      단지 좌표는 OSM/지오코딩 근사(Phase 1에서 공동주택 공공데이터로 교체). 거리는 사실이며 '수혜'는 표시하지 않음(P1)</div>`;
+  const list = p.querySelector("#list");
+  if (!near.length) list.innerHTML = `<div class="ps">반경 내 신호 없음</div>`;
+  near.forEach(({ s, dist }) => {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = cardHtml(s, `<span class="badge-near">${dist < 1000 ? Math.round(dist) + "m" : (dist / 1000).toFixed(1) + "km"}</span>`);
+    el.onclick = () => showSignal(s, true);
+    list.appendChild(el);
+  });
 }
 
 /* ══════════ 패널: 홈 ══════════ */
@@ -485,10 +616,11 @@ function showSignal(s, pan) {
 function renderPanel() {
   if (view.mode === "dong") return renderDong(view.dong);
   if (view.mode === "sgg") return renderSggFeed(view.sgg);
+  if (view.mode === "apt") return renderApt(view.apt);
   if (view.mode === "detail") return renderDetail(view.signal);
   renderHome();
 }
-function renderAll() { renderChips(); renderPanel(); if (mapApi) mapApi.refreshPins(); }
+function renderAll() { renderChips(); if (typeof buildTree === "function" && DONG_GEO) buildTree(); renderPanel(); if (mapApi) mapApi.refreshPins(); }
 
 /* ══════════ 지도: 카카오 → Leaflet 폴백 ══════════ */
 function bootMap() {
@@ -600,6 +732,20 @@ function initLeaflet() {
       badges.push(b);
     }
   };
+  const APT_ZOOM = 15;   // 이 줌 이상 = 아파트 단지 마커 노출
+  let aptDots = [];
+  const clearAptDots = () => { aptDots.forEach(m => map.removeLayer(m)); aptDots = []; };
+  const renderAptDots = () => {
+    clearAptDots();
+    if (map.getZoom() < APT_ZOOM) return;
+    const bd = map.getBounds();
+    APTS.filter(a => bd.contains([a.lat, a.lon])).slice(0, 120).forEach(a => {
+      const m = L.marker([a.lat, a.lon], { pane: "cand",
+        icon: L.divIcon({ className: "", html: `<div class="dong-badge" style="font-size:10px;padding:0 5px;border-color:#8a8a8f;color:#555">${a.n}</div>`, iconSize: null }) }).addTo(map);
+      m.on("click", () => { treeState.selKey = `apt|${a.n}|${a.dong}`; buildTree(); showApt(a); });
+      aptDots.push(m);
+    });
+  };
   const applyLOD = () => {
     if (map.getZoom() >= DONG_ZOOM) {
       if (!map.hasLayer(dongLayer)) map.addLayer(dongLayer);
@@ -608,6 +754,7 @@ function initLeaflet() {
       if (map.hasLayer(dongLayer)) map.removeLayer(dongLayer);
       renderSggBadges();
     }
+    renderAptDots();
   };
   map.on("zoomend moveend", applyLOD);
   // 지도 여백(타일)만 클릭 → 선택 해제 + 반경 원 제거.
@@ -652,7 +799,14 @@ function initLeaflet() {
   };
   const showRadius = s => { clearRadius(); addRadius(s); };
   const showRadiusMany = list => { clearRadius(); list.forEach(addRadius); };
-  mapApi = { refreshPins, panTo: ll => map.panTo([ll[1], ll[0]]), showRadius, showRadiusMany, clearRadius };
+  let aptMarker = null;
+  const showAptAnchor = a => {
+    if (aptMarker) map.removeLayer(aptMarker);
+    aptMarker = L.marker([a.lat, a.lon], { pane: "sig",
+      icon: L.divIcon({ className: "", html: `<div class="dong-badge" style="border-color:#c4392f;color:#c4392f">◎ ${a.n}</div>`, iconSize: null }) }).addTo(map);
+    showRadiusMany(signalsNearPoint([a.lon, a.lat]).map(x => x.s));
+  };
+  mapApi = { refreshPins, panTo: ll => map.panTo([ll[1], ll[0]]), showRadius, showRadiusMany, clearRadius, showAptAnchor };
   refreshPins();
 }
 function initKakao() {
@@ -887,18 +1041,20 @@ function renderRaw(more) {
 
 /* ══════════ 부트 ══════════ */
 (async () => {
-  const [dong, sgg, main, macro, rawData, autoData] = await Promise.all([
+  const [dong, sgg, main, macro, rawData, autoData, apartments] = await Promise.all([
     fetch("seoul_bdong.geojson").then(r => r.json()),     // 서울 전체 법정동 467 (§3.1 법정동 기준)
     fetch("sgg_capital.geojson").then(r => r.json()),     // 수도권 시군구 79
     fetch("signals.json").then(r => r.json()),
     fetch("macro_signals_draft.json").then(r => r.json()),
     fetch("capital_raw.json").then(r => r.json()),
-    fetch("signals_auto.json").then(r => r.json())
+    fetch("signals_auto.json").then(r => r.json()),
+    fetch("apartments.json").then(r => r.json()).catch(() => ({ apts: [] }))
   ]);
   DONG_GEO = dong;
   SGG_GEO = sgg;
   RAW = rawData.rows;
   AUTO = autoData.candidates;
+  APTS = (apartments && apartments.apts) || [];
   // 상태 파생 (§3.1: 정체 = 6개월+ 무움직임). status_override는 공사 진행 등
   // "무공시가 정상인 단계"에 한해 명시 근거(status_note)와 함께 사용
   SIGNALS = main.signals.map(s => {
@@ -909,6 +1065,7 @@ function renderRaw(more) {
   MACRO = macro.signals;
   renderChips();
   fillRegionSelect();
+  buildTree();
   renderPanel();
   bootMap();
   document.getElementById("v-map").onclick = () => setView("map");
