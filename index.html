@@ -552,7 +552,8 @@ function renderDetail(s) {
 /* ══════════ 시군구 피드 (지도에서 구/시 클릭) ══════════ */
 function showSgg(disp) {
   view = { mode: "sgg", sgg: disp };
-  renderPanel(); mapApi?.clearRadius();
+  renderPanel(); mapApi?.clearRadius(); mapApi?.clearAptMarker?.();
+  mapApi?.highlightRings?.((window._sggRings || {})[disp]);   // 선택 시군구 경계 강조
   const bd = window._sggBounds?.[disp];
   if (bd && window._map) window._map.fitBounds(bd);
 }
@@ -601,10 +602,16 @@ function gotoRaw(disp) {
 }
 
 /* ══════════ 뷰 전환 ══════════ */
-function goHome() { view = { mode: "home" }; renderPanel(); mapApi?.clearRadius(); }
+function goHome() {
+  view = { mode: "home" }; treeState.selKey = null;
+  if (typeof buildTree === "function" && DONG_GEO) buildTree();
+  renderPanel();
+  mapApi?.clearRadius(); mapApi?.clearHighlight?.(); mapApi?.clearAptMarker?.();
+}
 function showDong(f) {
   view = { mode: "dong", dong: f }; renderPanel();
-  mapApi?.clearRadius();   // 반경 원은 개별 신호 클릭 시에만 (다중 원은 산만)
+  mapApi?.clearRadius(); mapApi?.clearAptMarker?.();
+  mapApi?.highlightRings?.(ringsOf(f));   // 선택한 동 경계만 강조
 }
 function showSignal(s, pan) {
   view = { mode: "detail", signal: s }; renderPanel();
@@ -656,8 +663,9 @@ function initLeaflet() {
   SGG_GEO.features.forEach(f => {
     const disp = `${f.properties.sido} ${sggDisplayName(f.properties.name)}`;
     ringsOf(f).forEach(r => {
+      // 평소엔 투명(경계 숨김) — 클릭만 받음. 선택 시 highlight 레이어로 강조
       const poly = L.polygon(r.map(([x, y]) => [y, x]),
-        { color: "#3a4a5c", weight: 1.2, opacity: .55, fillOpacity: .01 }).addTo(map);
+        { stroke: false, fill: true, fillOpacity: 0, interactive: true }).addTo(map);
       poly.on("click", () => showSgg(disp));
       if (!window._sggBounds[disp]) window._sggBounds[disp] = poly.getBounds();
       else window._sggBounds[disp].extend(poly.getBounds());
@@ -672,11 +680,22 @@ function initLeaflet() {
   const dongLayer = L.layerGroup();
   DONG_GEO.features.forEach(f => {
     ringsOf(f).forEach(r => {
-      const poly = L.polygon(r.map(([x, y]) => [y, x]), { color: "#777", weight: 1, opacity: .6, fillOpacity: .01 });
+      // 투명 클릭 타겟 — 경계는 선택 시에만 강조
+      const poly = L.polygon(r.map(([x, y]) => [y, x]), { stroke: false, fill: true, fillOpacity: 0, interactive: true });
       poly.on("click", () => showDong(f));
       dongLayer.addLayer(poly);
     });
   });
+  // 선택 경계 강조 레이어 (호갱노노식: 선택한 동/구만 표시)
+  let hlLayer = null;
+  const clearHighlight = () => { if (hlLayer) { map.removeLayer(hlLayer); hlLayer = null; } };
+  const highlightRings = (ringsXY) => {
+    clearHighlight();
+    if (!ringsXY || !ringsXY.length) return;
+    const latlngs = ringsXY.map(r => r.map(([x, y]) => [y, x]));
+    hlLayer = L.polygon(latlngs, { pane: "cand", color: "#5b3fd4", weight: 2.5, opacity: .95,
+      fillColor: "#5b3fd4", fillOpacity: .12, interactive: false }).addTo(map);
+  };
 
   let badges = [], pins = [];
   const clearBadges = () => { badges.forEach(m => map.removeLayer(m)); badges = []; };
@@ -802,9 +821,11 @@ function initLeaflet() {
     if (aptMarker) map.removeLayer(aptMarker);
     aptMarker = L.marker([a.lat, a.lon], { pane: "sig",
       icon: L.divIcon({ className: "", html: `<div class="dong-badge" style="border-color:#c4392f;color:#c4392f">◎ ${a.n}</div>`, iconSize: null }) }).addTo(map);
-    clearRadius();   // 앵커 마커만, 다중 반경 원 없음
+    clearRadius(); clearHighlight();   // 앵커 마커만
   };
-  mapApi = { refreshPins, panTo: ll => map.panTo([ll[1], ll[0]]), showRadius, showRadiusMany, clearRadius, showAptAnchor };
+  const clearAptMarker = () => { if (aptMarker) { map.removeLayer(aptMarker); aptMarker = null; } };
+  mapApi = { refreshPins, panTo: ll => map.panTo([ll[1], ll[0]]), showRadius, showRadiusMany, clearRadius, showAptAnchor,
+             highlightRings, clearHighlight, clearAptMarker, sggRings: () => window._sggRings };
   refreshPins();
 }
 function initKakao() {
