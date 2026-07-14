@@ -19,6 +19,19 @@
   .chips { display:flex; gap:6px; flex-wrap:wrap; }
   .chip { font-size:12px; border:1px solid var(--line); border-radius:999px; padding:3px 10px; cursor:pointer; user-select:none; color:var(--muted); }
   .chip.on { border-color:var(--ink); color:var(--ink); font-weight:600; }
+  /* 필터 드롭다운 (멀티체크) */
+  .dd { position:relative; }
+  .ddbtn { font-size:12.5px; border:1px solid var(--line); border-radius:8px; padding:5px 10px; cursor:pointer;
+           user-select:none; background:#fff; display:flex; align-items:center; gap:5px; }
+  .ddbtn b { font-weight:700; }
+  .ddbtn .arr { color:var(--muted); font-size:10px; }
+  .ddbtn.filtered { border-color:#2e5ce6; color:#2e5ce6; }
+  .ddpanel { position:absolute; top:calc(100% + 5px); left:0; z-index:1200; background:#fff; border:1px solid var(--line);
+             border-radius:10px; box-shadow:0 6px 22px rgba(0,0,0,.12); min-width:160px; padding:6px; }
+  .ddrow { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:7px; cursor:pointer; font-size:13px; }
+  .ddrow:hover { background:#f2f6ff; }
+  .ddrow input { accent-color:#2e5ce6; pointer-events:none; }
+  .ddall { border-top:1px solid var(--line); margin-top:4px; padding-top:8px; color:var(--accent); font-size:12px; }
   #wrap { display:flex; height:calc(100vh - 87px); }
   #tree { width:300px; flex-shrink:0; border-right:1px solid var(--line); overflow-y:auto; padding:0 0 60px; font-size:13px; }
   #map { flex:1; min-width:0; }
@@ -125,9 +138,7 @@
     <span class="chip on" id="v-map">지도</span>
     <span class="chip" id="v-raw">수도권 데이터</span>
   </div>
-  <div class="chips" id="f-cat"></div>
-  <div class="chips" id="f-scale"></div>
-  <div class="chips" id="f-status"></div>
+  <div class="chips" id="f-dd"></div>
 </header>
 <div id="wrap">
   <nav id="tree"></nav>
@@ -343,21 +354,48 @@ function dongRelation(sig, feature) {
 const dongName = f => f.properties.adm_nm.split(" ").pop();
 
 /* ══════════ 필터 칩 ══════════ */
+/* 필터 3종을 드롭다운 멀티체크로 통합 */
+let openDD = null;
+const DD_DEFS = () => [
+  { id: "cat", label: "분류", keys: Object.keys(DISPLAY_CAT), set: filter.cat },
+  { id: "scale", label: "규모", keys: ["광역", "지구", "근린"], set: filter.scale },
+  { id: "status", label: "상태", keys: ["활성", "정체", "종결"], set: filter.status },
+];
 function renderChips() {
-  const mk = (el, keys, set) => {
-    el.innerHTML = "";
-    keys.forEach(k => {
-      const c = document.createElement("span");
-      c.className = "chip" + (set.has(k) ? " on" : "");
-      c.textContent = k;
-      c.onclick = () => { set.has(k) ? set.delete(k) : set.add(k); renderAll(); };
-      el.appendChild(c);
-    });
-  };
-  mk(document.getElementById("f-cat"), Object.keys(DISPLAY_CAT), filter.cat);
-  mk(document.getElementById("f-scale"), ["광역", "지구", "근린"], filter.scale);
-  mk(document.getElementById("f-status"), ["활성", "정체", "종결"], filter.status);
+  const host = document.getElementById("f-dd");
+  host.innerHTML = "";
+  DD_DEFS().forEach(d => {
+    const wrap = document.createElement("div");
+    wrap.className = "dd";
+    const all = d.set.size === d.keys.length;
+    const summary = all ? "전체" : (d.set.size === 0 ? "없음" : `${d.set.size}/${d.keys.length}`);
+    const btn = document.createElement("div");
+    btn.className = "ddbtn" + (all ? "" : " filtered");
+    btn.innerHTML = `${d.label}: <b>${summary}</b> <span class="arr">▾</span>`;
+    btn.onclick = (e) => { e.stopPropagation(); openDD = openDD === d.id ? null : d.id; renderChips(); };
+    wrap.appendChild(btn);
+    if (openDD === d.id) {
+      const panel = document.createElement("div");
+      panel.className = "ddpanel";
+      panel.onclick = e => e.stopPropagation();
+      d.keys.forEach(k => {
+        const row = document.createElement("div");
+        row.className = "ddrow";
+        row.innerHTML = `<input type="checkbox" ${d.set.has(k) ? "checked" : ""}> ${k}`;
+        row.onclick = () => { d.set.has(k) ? d.set.delete(k) : d.set.add(k); renderAll(); };
+        panel.appendChild(row);
+      });
+      const allRow = document.createElement("div");
+      allRow.className = "ddrow ddall";
+      allRow.textContent = all ? "모두 해제" : "모두 선택";
+      allRow.onclick = () => { d.keys.forEach(k => all ? d.set.delete(k) : d.set.add(k)); renderAll(); };
+      panel.appendChild(allRow);
+      wrap.appendChild(panel);
+    }
+    host.appendChild(wrap);
+  });
 }
+document.addEventListener("click", () => { if (openDD) { openDD = null; renderChips(); } });
 function fillRegionSelect() {
   const sel = document.getElementById("f-region");
   const regions = [...new Set(SIGNALS.map(s => `${s.sd} ${s.sg}`))].sort((a, b) => a.localeCompare(b, "ko"));
