@@ -2846,6 +2846,10 @@ function initKakao() {
 
   const applyLOD = () => { renderDongPoly(); renderJeongbiPoly(); renderHojae(); renderDongLabels(); renderAptDots(); renderRail(); loadBdong(); };
   K.event.addListener(map, "idle", applyLOD);
+  // 컨테이너 크기 확정 대응(Leaflet invalidateSize에 해당) — 0크기로 시작한 로드·모바일 회전·패널 토글 시
+  // 카카오 투영이 0×0에 굳으면 getBounds()가 한 점이 돼 호재 원이 전부 걸러진다. relayout으로 재투영 후 재렌더.
+  setTimeout(() => { try { map.relayout(); applyLOD(); } catch (e) {} }, 300);
+  try { new ResizeObserver(() => { try { map.relayout(); applyLOD(); } catch (e) {} }).observe(el); } catch (e) {}
   K.event.addListener(map, "click", () => { hideTip(); goHome(); });
   window._dbg = { applyLOD, renderHojae, renderDongLabels, map, get hjDots() { return hjDots; }, get railLayers() { return railLayers; }, get dongLabels() { return dongLabels; }, get jbPolys() { return jbPolys; }, get aptDots() { return aptDots; } };
   refreshJeongbiPoly = renderJeongbiPoly;
