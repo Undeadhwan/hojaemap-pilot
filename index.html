@@ -2713,6 +2713,21 @@ function hexA(hex, a) {
   const n = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
   return "rgba(" + parseInt(n.slice(0, 2), 16) + "," + parseInt(n.slice(2, 4), 16) + "," + parseInt(n.slice(4, 6), 16) + "," + a + ")";
 }
+/* 호재 원 마커 이미지(스타일별 캐시) — CustomOverlay div 대신 Kakao Marker로 렌더해 드래그 성능 확보
+   (사용자 "부드럽게" 2026-07-21). 색=분류·크기=등급·점선=단계·후광=근사 를 SVG 하나에 담고 캐시. */
+const _hjImg = {};
+function hojaeMarkerImage(col, r, bw, solid, fillOp, alpha, halo) {
+  const key = col + "|" + r + "|" + bw + "|" + solid + "|" + fillOp + "|" + alpha + "|" + halo;
+  if (_hjImg[key]) return _hjImg[key];
+  const size = Math.ceil((halo ? r + 9 : r + bw + 1) * 2), c = size / 2;
+  let inner = halo ? '<circle cx="' + c + '" cy="' + c + '" r="' + (r + 9) + '" fill="' + col + '" opacity="0.13"/>' : "";
+  inner += '<circle cx="' + c + '" cy="' + c + '" r="' + r + '" fill="' + hexA(col, fillOp) + '" stroke="' + col + '" stroke-width="' + bw + '"' + (solid ? "" : ' stroke-dasharray="4 3"') + '/>';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '"><g opacity="' + alpha + '">' + inner + '</g></svg>';
+  const img = new kakao.maps.MarkerImage("data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg),
+    new kakao.maps.Size(size, size), { offset: new kakao.maps.Point(c, c) });
+  _hjImg[key] = img;
+  return img;
+}
 /* ══════════ 카카오 SDK 렌더러 (initLeaflet 파리티, 2026-07-21 카카오맵 승인 적용) ══════════
    카카오 level은 낮을수록 확대(1=최대,14=최소) — Leaflet zoom과 반대. DONG_LV=6(z12)·APT_LV=4(z14) 실측 보정.
    circleMarker→CustomOverlay 고정픽셀 div, bindTooltip→공유 floating div, 반경 Circle은 meter(getRadius=meter) 직결. */
@@ -2758,15 +2773,14 @@ function initKakao() {
     for (const s of pool) { if (++n > 600) break; const [x, y] = s.geometry.coordinates; const unk = basisUnknown(s);
       const col = s.status === "종결" ? "#9aa3b2" : unk ? "#8a93a3" : colorOf(s); const lvl = levelOf(s); const solid = phaseSolid(s);
       const r = unk ? HJR.C : (HJR[lvl] || 5); const bw = !unk && lvl === "A" ? 2.6 : 2;
-      if (s.geo_approx) { const halo = document.createElement("div"); const hr = (r + 9) * 2;
-        halo.style.cssText = "width:" + hr + "px;height:" + hr + "px;border-radius:50%;background:" + col + ";opacity:.13;pointer-events:none";
-        hjDots.push(new K.CustomOverlay({ map, position: LL(x, y), content: halo, zIndex: 9, yAnchor: .5, xAnchor: .5 })); }
-      const d = document.createElement("div"); const dia = r * 2;
-      d.style.cssText = "width:" + dia + "px;height:" + dia + "px;border-radius:50%;box-sizing:border-box;cursor:pointer;background:" + hexA(col, unk ? .10 : solid ? .22 : .10) + ";border:" + bw + "px " + (solid ? "solid" : "dashed") + " " + col + ";opacity:" + (s.status === "종결" ? .45 : unk ? .75 : .9);
+      const alpha = s.status === "종결" ? .45 : unk ? .75 : .9, fillOp = unk ? .10 : solid ? .22 : .10;
+      // Marker + 캐시이미지(성능) — CustomOverlay div는 드래그마다 개별 재배치돼 수백 개면 버벅인다
+      const mk = new K.Marker({ map, position: LL(x, y), image: hojaeMarkerImage(col, r, bw, solid, fillOp, alpha, s.geo_approx), zIndex: 10 });
       const html = '<div class="apt-pop"><div class="apt-pop-nm" style="font-size:13px">' + s.title + '</div><div class="apt-pop-sub"><span style="color:' + col + ';font-weight:700">● ' + catOf(s) + '</span> · ' + lvlPill(lvl) + ' ' + gradeBasisHtml(s).replace(/ · $/, "") + '</div><div class="apt-pop-cats"><span>단계 ' + phaseOf(s) + (s.current_stage && s.current_stage !== phaseOf(s) ? " — " + s.current_stage : "") + '</span></div></div>';
-      d.addEventListener("mouseenter", e => showTip(html, e)); d.addEventListener("mousemove", e => showTip(html, e));
-      d.addEventListener("mouseleave", hideTip); d.addEventListener("click", e => { e.stopPropagation(); hideTip(); showSignal(s, false); });
-      hjDots.push(new K.CustomOverlay({ map, position: LL(x, y), content: d, zIndex: 10, yAnchor: .5, xAnchor: .5 })); } };
+      K.event.addListener(mk, "mouseover", () => { const q = toPt(x, y); const rc = mapEl.getBoundingClientRect(); showTip(html, { clientX: rc.left + q.x, clientY: rc.top + q.y }); });
+      K.event.addListener(mk, "mouseout", hideTip);
+      K.event.addListener(mk, "click", () => { hideTip(); showSignal(s, false); });
+      hjDots.push(mk); } };
 
   let dongLabels = [];
   const renderDongLabels = () => { dongLabels.forEach(o => o.setMap(null)); dongLabels = [];
